@@ -1,0 +1,373 @@
+{
+  "name": "1. Topic Generator",
+  "nodes": [
+    {
+      "parameters": {
+        "content": "## 1. Topic Generator - 사용 가이드\n\n### 목적\nRSS 피드(HN, TechCrunch)에서 토픽을 수집하고 AI로 분석하여 콘텐츠 생성 대기열에 추가\n\n### 사전 설정 필요\n1. **Credentials**: Anthropic API 키 설정\n2. **Variables 설정** (Settings > Variables):\n   - `COMMUNITY_API_URL`: 커뮤니티 API 주소\n   - `INTERNAL_API_TOKEN`: 내부 API 토큰\n   - `CONTENT_DRAFTER_WEBHOOK`: Workflow 2의 웹훅 URL\n\n### 실행 방법\n- **자동**: 6시간마다 자동 실행 (Schedule Trigger)\n- **수동**: 'Test Workflow' 버튼 클릭\n\n### 커스터마이징\n- RSS 피드 추가: 'Fetch HN RSS' 노드 복제 후 URL 변경\n- 실행 주기 변경: Schedule Trigger 설정 수정\n- AI 프롬프트 수정: 'AI Chain' 노드의 시스템 메시지 편집\n\n### 출력 데이터\n→ Workflow 2 (Content Drafter)로 토픽 전달",
+        "height": 520,
+        "width": 400
+      },
+      "id": "sticky-guide",
+      "name": "Sticky Note",
+      "type": "n8n-nodes-base.stickyNote",
+      "typeVersion": 1,
+      "position": [-500, 100]
+    },
+    {
+      "parameters": {
+        "rule": {
+          "interval": [
+            {
+              "field": "hours",
+              "hoursInterval": 6
+            }
+          ]
+        }
+      },
+      "id": "schedule-trigger",
+      "name": "Schedule Trigger",
+      "type": "n8n-nodes-base.scheduleTrigger",
+      "typeVersion": 1.2,
+      "position": [0, 300]
+    },
+    {
+      "parameters": {
+        "url": "https://hnrss.org/best",
+        "options": {
+          "response": {
+            "response": {
+              "responseFormat": "text"
+            }
+          }
+        }
+      },
+      "id": "fetch-hn-rss",
+      "name": "Fetch HN RSS",
+      "type": "n8n-nodes-base.httpRequest",
+      "typeVersion": 4.2,
+      "position": [220, 200]
+    },
+    {
+      "parameters": {
+        "url": "https://techcrunch.com/feed/",
+        "options": {
+          "response": {
+            "response": {
+              "responseFormat": "text"
+            }
+          }
+        }
+      },
+      "id": "fetch-techcrunch-rss",
+      "name": "Fetch TechCrunch RSS",
+      "type": "n8n-nodes-base.httpRequest",
+      "typeVersion": 4.2,
+      "position": [220, 400]
+    },
+    {
+      "parameters": {
+        "mode": "runOnceForEachItem",
+        "jsCode": "// Parse RSS XML and extract items\nconst xmlData = $input.item.json.data;\n\n// Simple XML parsing for RSS items\nconst items = [];\nconst itemRegex = /<item>(.*?)<\\/item>/gs;\nlet match;\n\nwhile ((match = itemRegex.exec(xmlData)) !== null) {\n  const itemXml = match[1];\n  \n  const titleMatch = /<title>(?:<\\!\\[CDATA\\[)?(.+?)(?:\\]\\]>)?<\\/title>/s.exec(itemXml);\n  const linkMatch = /<link>(.+?)<\\/link>/s.exec(itemXml);\n  const descMatch = /<description>(?:<\\!\\[CDATA\\[)?(.+?)(?:\\]\\]>)?<\\/description>/s.exec(itemXml);\n  const pubDateMatch = /<pubDate>(.+?)<\\/pubDate>/s.exec(itemXml);\n  \n  if (titleMatch && linkMatch) {\n    items.push({\n      title: titleMatch[1].trim().replace(/<[^>]*>/g, ''),\n      link: linkMatch[1].trim(),\n      description: descMatch ? descMatch[1].trim().replace(/<[^>]*>/g, '').substring(0, 500) : '',\n      pubDate: pubDateMatch ? pubDateMatch[1].trim() : null,\n      source: $input.item.json.source || 'unknown'\n    });\n  }\n}\n\n// Return only the 5 most recent items\nreturn items.slice(0, 5).map(item => ({ json: item }));"
+      },
+      "id": "parse-rss",
+      "name": "Parse RSS",
+      "type": "n8n-nodes-base.code",
+      "typeVersion": 2,
+      "position": [440, 300]
+    },
+    {
+      "parameters": {
+        "assignments": {
+          "assignments": [
+            {
+              "id": "source-hn",
+              "name": "source",
+              "value": "hackernews",
+              "type": "string"
+            }
+          ]
+        },
+        "options": {}
+      },
+      "id": "set-source-hn",
+      "name": "Set Source HN",
+      "type": "n8n-nodes-base.set",
+      "typeVersion": 3.4,
+      "position": [220, 100]
+    },
+    {
+      "parameters": {
+        "assignments": {
+          "assignments": [
+            {
+              "id": "source-tc",
+              "name": "source",
+              "value": "techcrunch",
+              "type": "string"
+            }
+          ]
+        },
+        "options": {}
+      },
+      "id": "set-source-tc",
+      "name": "Set Source TC",
+      "type": "n8n-nodes-base.set",
+      "typeVersion": 3.4,
+      "position": [220, 500]
+    },
+    {
+      "parameters": {},
+      "id": "merge-sources",
+      "name": "Merge Sources",
+      "type": "n8n-nodes-base.merge",
+      "typeVersion": 3,
+      "position": [660, 300]
+    },
+    {
+      "parameters": {
+        "mode": "runOnceForEachItem",
+        "jsCode": "// Check if topic already exists or was recently processed\nconst topic = $input.item.json;\n\n// Simple deduplication based on title similarity\nconst normalizedTitle = topic.title.toLowerCase()\n  .replace(/[^a-z0-9\\s]/g, '')\n  .replace(/\\s+/g, ' ')\n  .trim();\n\n// Add normalized title for dedup checking\nreturn {\n  json: {\n    ...topic,\n    normalizedTitle,\n    topicId: Buffer.from(normalizedTitle).toString('base64').substring(0, 32)\n  }\n};"
+      },
+      "id": "dedupe-check",
+      "name": "Dedupe Check",
+      "type": "n8n-nodes-base.code",
+      "typeVersion": 2,
+      "position": [880, 300]
+    },
+    {
+      "parameters": {
+        "model": "claude-sonnet-4-20250514",
+        "options": {
+          "temperature": 0.7,
+          "maxTokensToSample": 500
+        }
+      },
+      "id": "ai-topic-enricher",
+      "name": "AI Topic Enricher",
+      "type": "@n8n/n8n-nodes-langchain.lmChatAnthropic",
+      "typeVersion": 1.2,
+      "position": [1100, 300],
+      "credentials": {
+        "anthropicApi": {
+          "id": "anthropic-api",
+          "name": "Anthropic API"
+        }
+      }
+    },
+    {
+      "parameters": {
+        "promptType": "define",
+        "text": "={{ $json.title }}\n\nDescription: {{ $json.description }}",
+        "hasOutputParser": true,
+        "messages": {
+          "messageValues": [
+            {
+              "message": "You are an expert at analyzing tech topics and determining their discussion potential for a community forum.\n\nGiven an article title and description, generate the following as JSON:\n\n1. \"discussionAngle\": One of \"contrarian\", \"practical\", or \"personal\"\n   - contrarian: Challenges common wisdom\n   - practical: Focuses on actionable insights\n   - personal: Invites personal experiences\n\n2. \"hook\": A compelling 1-sentence opener that would make someone want to discuss this\n\n3. \"contentType\": One of \"article\", \"discussion\", \"question\", \"hot-take\"\n   - article: Analysis or summary\n   - discussion: Open-ended conversation starter\n   - question: Seeking opinions/experiences\n   - hot-take: Controversial opinion\n\n4. \"controversyLevel\": 1-5 (1=safe, 5=spicy)\n\n5. \"complexity\": One of \"beginner\", \"intermediate\", \"advanced\"\n\n6. \"expertiseTags\": Array of 2-4 relevant expertise areas from:\n   [\"fundraising\", \"product-market-fit\", \"hiring\", \"startup-strategy\", \"backend\", \"system-design\", \"debugging\", \"code-review\", \"devops\", \"product-management\", \"user-research\", \"metrics\", \"roadmapping\", \"bootstrapping\", \"marketing\", \"solo-founder\", \"saas\", \"automation\", \"ux-design\", \"product-design\", \"design-systems\", \"accessibility\"]\n\nRespond with ONLY valid JSON, no markdown or explanation."
+            }
+          ]
+        }
+      },
+      "id": "ai-chain",
+      "name": "AI Chain",
+      "type": "@n8n/n8n-nodes-langchain.chainLlm",
+      "typeVersion": 1.4,
+      "position": [1100, 500]
+    },
+    {
+      "parameters": {
+        "jsCode": "try {\n  // Clean and parse JSON response\n  let jsonStr = $json.text || $json.response || '';\n  \n  // Remove markdown code blocks if present\n  jsonStr = jsonStr.replace(/```json\\n?/g, '').replace(/```\\n?/g, '');\n  jsonStr = jsonStr.trim();\n  \n  const parsed = JSON.parse(jsonStr);\n  \n  return {\n    json: {\n      valid: true,\n      ...parsed\n    }\n  };\n} catch (e) {\n  // Default values if parsing fails\n  return {\n    json: {\n      valid: false,\n      discussionAngle: 'practical',\n      hook: $input.first().json.title,\n      contentType: 'discussion',\n      controversyLevel: 3,\n      complexity: 'intermediate',\n      expertiseTags: ['startup-strategy']\n    }\n  };\n}"
+      },
+      "id": "parse-ai-response",
+      "name": "Parse AI Response",
+      "type": "n8n-nodes-base.code",
+      "typeVersion": 2,
+      "position": [1320, 300]
+    },
+    {
+      "parameters": {
+        "mode": "runOnceForEachItem",
+        "jsCode": "// Combine original topic with AI enrichment\nconst originalTopic = $('Dedupe Check').item.json;\nconst enrichment = $input.item.json;\n\nconst now = new Date().toISOString();\n\nreturn {\n  json: {\n    title: originalTopic.title,\n    hook: enrichment.hook,\n    source: originalTopic.source,\n    sourceUrl: originalTopic.link,\n    contentType: enrichment.contentType,\n    discussionAngle: enrichment.discussionAngle,\n    controversyLevel: enrichment.controversyLevel,\n    complexity: enrichment.complexity,\n    expertiseTags: enrichment.expertiseTags,\n    status: 'queued',\n    priority: enrichment.controversyLevel >= 4 ? 8 : 5,\n    createdAt: now,\n    metadata: {\n      originalDescription: originalTopic.description,\n      pubDate: originalTopic.pubDate,\n      topicId: originalTopic.topicId,\n      aiParsingValid: enrichment.valid\n    }\n  }\n};"
+      },
+      "id": "combine-data",
+      "name": "Combine Data",
+      "type": "n8n-nodes-base.code",
+      "typeVersion": 2,
+      "position": [1540, 300]
+    },
+    {
+      "parameters": {
+        "url": "={{ $vars.COMMUNITY_API_URL }}/api/internal/topics",
+        "sendHeaders": true,
+        "headerParameters": {
+          "parameters": [
+            {
+              "name": "Content-Type",
+              "value": "application/json"
+            },
+            {
+              "name": "Authorization",
+              "value": "Bearer {{ $vars.INTERNAL_API_TOKEN }}"
+            }
+          ]
+        },
+        "sendBody": true,
+        "specifyBody": "json",
+        "jsonBody": "={{ JSON.stringify($json) }}",
+        "options": {}
+      },
+      "id": "store-to-queue",
+      "name": "Store to Queue",
+      "type": "n8n-nodes-base.httpRequest",
+      "typeVersion": 4.2,
+      "position": [1760, 300]
+    },
+    {
+      "parameters": {
+        "url": "={{ $vars.CONTENT_DRAFTER_WEBHOOK }}",
+        "sendHeaders": true,
+        "headerParameters": {
+          "parameters": [
+            {
+              "name": "Content-Type",
+              "value": "application/json"
+            }
+          ]
+        },
+        "sendBody": true,
+        "specifyBody": "json",
+        "jsonBody": "={{ JSON.stringify($json) }}",
+        "options": {}
+      },
+      "id": "trigger-drafter",
+      "name": "Trigger Content Drafter",
+      "type": "n8n-nodes-base.httpRequest",
+      "typeVersion": 4.2,
+      "position": [1980, 300]
+    },
+    {
+      "parameters": {
+        "mode": "runOnceForEachItem",
+        "jsCode": "// Log workflow execution\nreturn {\n  json: {\n    workflowName: 'Topic Generator',\n    status: 'completed',\n    itemsProcessed: $input.all().length,\n    timestamp: new Date().toISOString()\n  }\n};"
+      },
+      "id": "log-execution",
+      "name": "Log Execution",
+      "type": "n8n-nodes-base.code",
+      "typeVersion": 2,
+      "position": [2200, 300]
+    }
+  ],
+  "connections": {
+    "Schedule Trigger": {
+      "main": [
+        [
+          { "node": "Set Source HN", "type": "main", "index": 0 },
+          { "node": "Fetch TechCrunch RSS", "type": "main", "index": 0 }
+        ]
+      ]
+    },
+    "Set Source HN": {
+      "main": [
+        [
+          { "node": "Fetch HN RSS", "type": "main", "index": 0 }
+        ]
+      ]
+    },
+    "Set Source TC": {
+      "main": [
+        [
+          { "node": "Parse RSS", "type": "main", "index": 0 }
+        ]
+      ]
+    },
+    "Fetch HN RSS": {
+      "main": [
+        [
+          { "node": "Parse RSS", "type": "main", "index": 0 }
+        ]
+      ]
+    },
+    "Fetch TechCrunch RSS": {
+      "main": [
+        [
+          { "node": "Set Source TC", "type": "main", "index": 0 }
+        ]
+      ]
+    },
+    "Parse RSS": {
+      "main": [
+        [
+          { "node": "Merge Sources", "type": "main", "index": 0 }
+        ]
+      ]
+    },
+    "Merge Sources": {
+      "main": [
+        [
+          { "node": "Dedupe Check", "type": "main", "index": 0 }
+        ]
+      ]
+    },
+    "Dedupe Check": {
+      "main": [
+        [
+          { "node": "AI Chain", "type": "main", "index": 0 }
+        ]
+      ]
+    },
+    "AI Topic Enricher": {
+      "ai_languageModel": [
+        [
+          { "node": "AI Chain", "type": "ai_languageModel", "index": 0 }
+        ]
+      ]
+    },
+    "AI Chain": {
+      "main": [
+        [
+          { "node": "Parse AI Response", "type": "main", "index": 0 }
+        ]
+      ]
+    },
+    "Parse AI Response": {
+      "main": [
+        [
+          { "node": "Combine Data", "type": "main", "index": 0 }
+        ]
+      ]
+    },
+    "Combine Data": {
+      "main": [
+        [
+          { "node": "Store to Queue", "type": "main", "index": 0 }
+        ]
+      ]
+    },
+    "Store to Queue": {
+      "main": [
+        [
+          { "node": "Trigger Content Drafter", "type": "main", "index": 0 }
+        ]
+      ]
+    },
+    "Trigger Content Drafter": {
+      "main": [
+        [
+          { "node": "Log Execution", "type": "main", "index": 0 }
+        ]
+      ]
+    }
+  },
+  "active": false,
+  "versionId": "1",
+  "settings": {
+    "executionOrder": "v1"
+  },
+  "meta": {
+    "instanceId": "community-automation"
+  },
+  "tags": [
+    {
+      "name": "community-automation"
+    }
+  ]
+}

@@ -1,0 +1,204 @@
+{
+  "name": "Website Status Monitor",
+  "active": false,
+  "versionId": "1",
+  "nodes": [
+    {
+      "parameters": {
+        "rule": {
+          "interval": [
+            {
+              "field": "minutes",
+              "minutesInterval": 5
+            }
+          ]
+        }
+      },
+      "id": "schedule-trigger",
+      "name": "Every 5 Minutes",
+      "type": "n8n-nodes-base.scheduleTrigger",
+      "typeVersion": 1.2,
+      "position": [0, 0]
+    },
+    {
+      "parameters": {
+        "url": "={{ $vars.MONITOR_URL || 'https://example.com' }}",
+        "options": {
+          "timeout": 10000,
+          "response": {
+            "response": {
+              "fullResponse": true
+            }
+          }
+        }
+      },
+      "id": "http-request",
+      "name": "Check Website",
+      "type": "n8n-nodes-base.httpRequest",
+      "typeVersion": 4.2,
+      "position": [220, 0],
+      "onError": "continueErrorOutput"
+    },
+    {
+      "parameters": {
+        "jsCode": "// Get response data\nconst items = $input.all();\nconst item = items[0];\n\n// Check if there was an error (from error output)\nconst hasError = item.json.error !== undefined;\n\nlet status, statusCode, responseTime, errorMessage;\n\nif (hasError) {\n  status = 'DOWN';\n  statusCode = 0;\n  responseTime = 0;\n  errorMessage = item.json.error?.message || 'Connection failed';\n} else {\n  statusCode = item.json.statusCode || 0;\n  responseTime = item.json.responseTime || 0;\n  \n  // Define thresholds\n  const MAX_RESPONSE_TIME = 5000; // 5 seconds\n  \n  if (statusCode >= 200 && statusCode < 400 && responseTime < MAX_RESPONSE_TIME) {\n    status = 'UP';\n    errorMessage = null;\n  } else if (statusCode >= 400) {\n    status = 'DOWN';\n    errorMessage = `HTTP Error: ${statusCode}`;\n  } else if (responseTime >= MAX_RESPONSE_TIME) {\n    status = 'SLOW';\n    errorMessage = `Response time: ${responseTime}ms exceeds ${MAX_RESPONSE_TIME}ms`;\n  } else {\n    status = 'UNKNOWN';\n    errorMessage = 'Unknown status';\n  }\n}\n\nreturn [{\n  json: {\n    url: $vars.MONITOR_URL || 'https://example.com',\n    status,\n    statusCode,\n    responseTime,\n    errorMessage,\n    checkedAt: DateTime.now().toISO(),\n    shouldAlert: status !== 'UP'\n  }\n}];"
+      },
+      "id": "analyze-response",
+      "name": "Analyze Response",
+      "type": "n8n-nodes-base.code",
+      "typeVersion": 2,
+      "position": [440, 0]
+    },
+    {
+      "parameters": {
+        "conditions": {
+          "options": {
+            "caseSensitive": true,
+            "leftValue": "",
+            "typeValidation": "strict"
+          },
+          "conditions": [
+            {
+              "id": "condition-alert",
+              "leftValue": "={{ $json.shouldAlert }}",
+              "rightValue": true,
+              "operator": {
+                "type": "boolean",
+                "operation": "equals"
+              }
+            }
+          ],
+          "combinator": "and"
+        },
+        "options": {}
+      },
+      "id": "if-should-alert",
+      "name": "Should Alert?",
+      "type": "n8n-nodes-base.if",
+      "typeVersion": 2.2,
+      "position": [660, 0]
+    },
+    {
+      "parameters": {
+        "sendTo": "={{ $vars.ALERT_EMAIL || 'admin@example.com' }}",
+        "subject": "=🚨 Website Alert: {{ $json.url }} is {{ $json.status }}",
+        "message": "=Website Monitoring Alert\n\n━━━━━━━━━━━━━━━━━━━━━━━━━━\n\n🔴 Status: {{ $json.status }}\n🌐 URL: {{ $json.url }}\n📊 HTTP Code: {{ $json.statusCode }}\n⏱️ Response Time: {{ $json.responseTime }}ms\n❌ Error: {{ $json.errorMessage }}\n\n━━━━━━━━━━━━━━━━━━━━━━━━━━\n\n🕐 Checked at: {{ $json.checkedAt }}\n\nPlease investigate immediately.",
+        "options": {}
+      },
+      "id": "send-email",
+      "name": "Send Alert Email",
+      "type": "n8n-nodes-base.emailSend",
+      "typeVersion": 2.1,
+      "position": [880, -100],
+      "credentials": {
+        "smtp": {
+          "id": "SMTP_CREDENTIAL_ID",
+          "name": "SMTP Account"
+        }
+      }
+    },
+    {
+      "parameters": {
+        "values": {
+          "string": [
+            {
+              "name": "result",
+              "value": "Website is UP - No alert needed"
+            }
+          ]
+        },
+        "options": {}
+      },
+      "id": "no-alert",
+      "name": "No Alert Needed",
+      "type": "n8n-nodes-base.set",
+      "typeVersion": 3.4,
+      "position": [880, 100]
+    }
+  ],
+  "connections": {
+    "Every 5 Minutes": {
+      "main": [
+        [
+          {
+            "node": "Check Website",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "Check Website": {
+      "main": [
+        [
+          {
+            "node": "Analyze Response",
+            "type": "main",
+            "index": 0
+          }
+        ],
+        [
+          {
+            "node": "Analyze Response",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "Analyze Response": {
+      "main": [
+        [
+          {
+            "node": "Should Alert?",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "Should Alert?": {
+      "main": [
+        [
+          {
+            "node": "Send Alert Email",
+            "type": "main",
+            "index": 0
+          }
+        ],
+        [
+          {
+            "node": "No Alert Needed",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    }
+  },
+  "settings": {
+    "executionOrder": "v1"
+  },
+  "staticData": null,
+  "tags": [
+    {
+      "name": "monitoring"
+    },
+    {
+      "name": "alerts"
+    }
+  ],
+  "triggerCount": 1,
+  "variables": [
+    {
+      "key": "MONITOR_URL",
+      "value": "https://example.com",
+      "type": "string"
+    },
+    {
+      "key": "ALERT_EMAIL",
+      "value": "admin@example.com",
+      "type": "string"
+    }
+  ]
+}

@@ -1,0 +1,316 @@
+{
+  "name": "5. Engagement Simulator",
+  "nodes": [
+    {
+      "parameters": {
+        "content": "## 5. Engagement Simulator - 사용 가이드\n\n### 목적\n게시된 포스트에 다른 페르소나가 자연스럽게 댓글로 참여\n\n### Rails API 연동\n**엔드포인트**: `POST /api/v1/posts/:post_id/comments`\n**인증**: Bearer Token (각 engager 페르소나의 api_token)\n**요청 형식**:\n```json\n{\n  \"comment\": {\n    \"content\": \"댓글 내용\"\n  }\n}\n```\n\n### Engagement 확률 (콘텐츠 타입별)\n- **hot-take**: 85% (논쟁적 → 반응 많음)\n- **question**: 90% (질문 → 답변 유도)\n- **discussion**: 60%\n- **article**: 40%\n\n### 규칙\n- 자기 포스트에 자기가 댓글 달기 금지\n- 1-2명의 다른 페르소나가 참여\n- 5-30분 시차로 staggered 응답\n\n### 댓글 유형\n- **agreement** (35%): 동의 + 개인 경험\n- **pushback** (25%): 정중한 반론\n- **question** (25%): 추가 질문\n- **experience** (15%): 관련 경험 공유\n\n### 사전 설정 필요\n1. **Credentials**: Google Gemini API (댓글 생성)\n2. **Variables**:\n   - `COMMUNITY_API_URL`: Rails 서버 URL\n   - 각 페르소나별 API 토큰\n\n### 웹훅 URL\n활성화 후 URL 복사 → Workflow 4의 `ENGAGEMENT_WEBHOOK`에 설정",
+        "height": 780,
+        "width": 450
+      },
+      "id": "sticky-guide",
+      "name": "Sticky Note",
+      "type": "n8n-nodes-base.stickyNote",
+      "typeVersion": 1,
+      "position": [-550, 20]
+    },
+    {
+      "parameters": {
+        "httpMethod": "POST",
+        "path": "engagement-simulator",
+        "responseMode": "responseNode",
+        "options": {}
+      },
+      "id": "webhook-trigger",
+      "name": "Webhook Trigger",
+      "type": "n8n-nodes-base.webhook",
+      "typeVersion": 2,
+      "position": [0, 300],
+      "webhookId": "engagement-simulator-webhook"
+    },
+    {
+      "parameters": {
+        "jsCode": "const post = $input.first().json.body || $input.first().json;\n\n// Engagement chance based on content type\nconst engagementChance = {\n  'hot-take': 0.85,\n  'question': 0.9,\n  'discussion': 0.6,\n  'article': 0.4\n};\n\nconst contentType = post.topic?.contentType || 'discussion';\nconst chance = engagementChance[contentType] || 0.5;\n\nconst shouldEngage = Math.random() < chance;\n\nreturn {\n  json: {\n    post,\n    engagementDecision: {\n      shouldEngage,\n      contentType,\n      chance,\n      reason: shouldEngage ? 'Random check passed' : 'Random check failed'\n    }\n  }\n};"
+      },
+      "id": "should-engage",
+      "name": "Should Engage Decision",
+      "type": "n8n-nodes-base.code",
+      "typeVersion": 2,
+      "position": [220, 300]
+    },
+    {
+      "parameters": {
+        "conditions": {
+          "options": {
+            "caseSensitive": true,
+            "leftValue": "",
+            "typeValidation": "strict"
+          },
+          "conditions": [
+            {
+              "id": "engage-check",
+              "leftValue": "={{ $json.engagementDecision.shouldEngage }}",
+              "rightValue": true,
+              "operator": {
+                "type": "boolean",
+                "operation": "equals"
+              }
+            }
+          ],
+          "combinator": "and"
+        },
+        "options": {}
+      },
+      "id": "engage-gate",
+      "name": "Engage Gate",
+      "type": "n8n-nodes-base.if",
+      "typeVersion": 2,
+      "position": [440, 300]
+    },
+    {
+      "parameters": {
+        "jsCode": "const { post } = $input.first().json;\n\n// All personas with API token variable names\nconst allPersonas = [\n  {\n    id: 'alex_founder',\n    name: 'Alex Chen',\n    tone: 'direct, occasionally sarcastic, data-driven',\n    phrases: ['here\\'s the thing', 'unpopular opinion', 'learned this the hard way'],\n    apiTokenVar: 'ALEX_FOUNDER_API_TOKEN'\n  },\n  {\n    id: 'dev_sam',\n    name: 'Sam Kim',\n    tone: 'technical but accessible, slightly cynical about hype',\n    phrases: ['tbh', 'ngl', 'the real issue is', 'lol'],\n    apiTokenVar: 'DEV_SAM_API_TOKEN'\n  },\n  {\n    id: 'jenny_pm',\n    name: 'Jenny Park',\n    tone: 'analytical, structured, occasionally uses frameworks',\n    phrases: ['from my experience', 'the key insight here', 'worth noting'],\n    apiTokenVar: 'JENNY_PM_API_TOKEN'\n  },\n  {\n    id: 'mike_growth',\n    name: 'Mike Lee',\n    tone: 'casual, transparent about struggles, encouraging',\n    phrases: ['building in public', 'small win', 'figured I\\'d share', 'anyone else?'],\n    apiTokenVar: 'MIKE_GROWTH_API_TOKEN'\n  },\n  {\n    id: 'sarah_designer',\n    name: 'Sarah Choi',\n    tone: 'opinionated about design, appreciates craft, sometimes contrarian',\n    phrases: ['hot take', 'this drives me crazy', 'underrated'],\n    apiTokenVar: 'SARAH_DESIGNER_API_TOKEN'\n  }\n];\n\n// Never engage with own post\nconst originalPersonaId = post.persona?.id || post.personaId;\nconst availablePersonas = allPersonas.filter(p => p.id !== originalPersonaId);\n\n// Select 1-2 engagers randomly\nconst numEngagers = Math.floor(Math.random() * 2) + 1;\n\n// Shuffle and select\nconst shuffled = availablePersonas.sort(() => Math.random() - 0.5);\nconst selectedEngagers = shuffled.slice(0, numEngagers);\n\n// Comment types with weights\nconst commentTypes = [\n  { type: 'agreement', weight: 0.35 },\n  { type: 'pushback', weight: 0.25 },\n  { type: 'question', weight: 0.25 },\n  { type: 'experience', weight: 0.15 }\n];\n\n// Assign engagement details to each engager\nconst engagements = selectedEngagers.map((persona, index) => {\n  // Staggered delays: 5-30 minutes apart\n  const baseDelay = 5 + Math.random() * 25;\n  const delayMinutes = Math.floor((index + 1) * baseDelay);\n  \n  // Select comment type based on weights\n  let commentType = 'agreement';\n  const rand = Math.random();\n  let cumulative = 0;\n  for (const ct of commentTypes) {\n    cumulative += ct.weight;\n    if (rand < cumulative) {\n      commentType = ct.type;\n      break;\n    }\n  }\n  \n  return {\n    persona,\n    delayMinutes,\n    commentType,\n    scheduledFor: new Date(Date.now() + delayMinutes * 60 * 1000).toISOString()\n  };\n});\n\nreturn engagements.map(e => ({\n  json: {\n    post,\n    engagement: e\n  }\n}));"
+      },
+      "id": "select-engagers",
+      "name": "Select Engagers",
+      "type": "n8n-nodes-base.code",
+      "typeVersion": 2,
+      "position": [660, 200]
+    },
+    {
+      "parameters": {
+        "amount": "={{ $json.engagement.delayMinutes }}",
+        "unit": "minutes"
+      },
+      "id": "wait-delay",
+      "name": "Wait Staggered Delay",
+      "type": "n8n-nodes-base.wait",
+      "typeVersion": 1.1,
+      "position": [880, 200]
+    },
+    {
+      "parameters": {
+        "jsCode": "const { post, engagement } = $input.first().json;\nconst engager = engagement.persona;\nconst commentType = engagement.commentType;\n\n// Build comment generation prompt\nconst typeGuidance = {\n  'agreement': 'Agree with the post and add a personal detail or example that supports the point.',\n  'pushback': 'Respectfully disagree or provide a counterpoint. Be specific about what you disagree with.',\n  'question': 'Ask a clarifying question or probe deeper into one aspect of the post.',\n  'experience': 'Share a brief related personal experience that adds to the discussion.'\n};\n\nconst prompt = `You are ${engager.name} commenting on a community post.\n\nYOUR STYLE: ${engager.tone}\nYOUR COMMON PHRASES: ${engager.phrases.slice(0, 2).join(', ')}\n\nTHE POST YOU'RE RESPONDING TO:\n\"\"\"\n${post.content.substring(0, 500)}\n\"\"\"\n\nCOMMENT TYPE: ${commentType}\nGUIDANCE: ${typeGuidance[commentType]}\n\nWRITE A COMMENT THAT:\n1. Is 1-3 sentences only\n2. Matches your persona's tone\n3. Adds value to the discussion\n4. Feels authentic and spontaneous\n\nDO NOT:\n- Summarize the post\n- Say \"Great post!\" or generic praise\n- Be longer than the original post\n- Use formal language or AI-sounding phrases\n- Start with \"I\" if possible\n\nWrite ONLY the comment text in Korean, nothing else.`;\n\nreturn {\n  json: {\n    prompt,\n    post,\n    engagement,\n    systemMessage: 'You are a community member writing a brief, authentic comment in Korean. Write naturally as the persona described, maintaining their unique voice and style.'\n  }\n};"
+      },
+      "id": "build-comment-prompt",
+      "name": "Build Comment Prompt",
+      "type": "n8n-nodes-base.code",
+      "typeVersion": 2,
+      "position": [1100, 200]
+    },
+    {
+      "parameters": {
+        "modelName": "models/gemini-2.0-flash",
+        "options": {
+          "temperature": 0.9,
+          "maxOutputTokens": 300
+        }
+      },
+      "id": "ai-comment-generator",
+      "name": "Gemini Comment Generator",
+      "type": "@n8n/n8n-nodes-langchain.lmChatGoogleGemini",
+      "typeVersion": 1,
+      "position": [1320, 400],
+      "credentials": {
+        "googleGeminiApi": {
+          "id": "gemini-api",
+          "name": "Google Gemini API"
+        }
+      }
+    },
+    {
+      "parameters": {
+        "promptType": "define",
+        "text": "={{ $json.prompt }}",
+        "messages": {
+          "messageValues": [
+            {
+              "message": "={{ $json.systemMessage }}"
+            }
+          ]
+        }
+      },
+      "id": "generate-comment-chain",
+      "name": "Generate Comment",
+      "type": "@n8n/n8n-nodes-langchain.chainLlm",
+      "typeVersion": 1.4,
+      "position": [1320, 200]
+    },
+    {
+      "parameters": {
+        "jsCode": "const comment = $json.text || $json.response || '';\nconst { post, engagement } = $('Build Comment Prompt').first().json;\n\n// Clean up the comment\nlet cleanComment = comment.trim();\n\n// Remove any quotes that might have been added\ncleanComment = cleanComment.replace(/^[\"']|[\"']$/g, '');\n\n// Get API token from n8n variables\nconst apiToken = $vars[engagement.persona.apiTokenVar] || '';\n\nreturn {\n  json: {\n    post,\n    engagement: {\n      ...engagement,\n      content: cleanComment,\n      apiToken\n    }\n  }\n};"
+      },
+      "id": "format-comment",
+      "name": "Format Comment",
+      "type": "n8n-nodes-base.code",
+      "typeVersion": 2,
+      "position": [1540, 200]
+    },
+    {
+      "parameters": {
+        "url": "={{ $vars.COMMUNITY_API_URL }}/api/v1/posts/{{ $json.post.platformPostId }}/comments",
+        "sendHeaders": true,
+        "headerParameters": {
+          "parameters": [
+            {
+              "name": "Authorization",
+              "value": "={{ 'Bearer ' + $json.engagement.apiToken }}"
+            },
+            {
+              "name": "Content-Type",
+              "value": "application/json"
+            }
+          ]
+        },
+        "sendBody": true,
+        "specifyBody": "json",
+        "jsonBody": "={\n  \"comment\": {\n    \"content\": {{ JSON.stringify($json.engagement.content) }}\n  }\n}",
+        "options": {
+          "response": {
+            "response": {
+              "fullResponse": true
+            }
+          }
+        }
+      },
+      "id": "post-comment",
+      "name": "Post Comment to API",
+      "type": "n8n-nodes-base.httpRequest",
+      "typeVersion": 4.2,
+      "position": [1760, 200]
+    },
+    {
+      "parameters": {
+        "jsCode": "// Log engagement to database\nconst data = $input.first().json;\nconst originalData = $('Format Comment').first().json;\n\nconst log = {\n  postId: originalData.post?.platformPostId,\n  engagerPersonaId: originalData.engagement?.persona?.id,\n  commentType: originalData.engagement?.commentType,\n  content: originalData.engagement?.content,\n  delayMinutes: originalData.engagement?.delayMinutes,\n  executedAt: new Date().toISOString(),\n  status: data.statusCode === 201 ? 'completed' : 'failed',\n  response: data.body\n};\n\nreturn { json: log };"
+      },
+      "id": "log-engagement",
+      "name": "Log Engagement",
+      "type": "n8n-nodes-base.code",
+      "typeVersion": 2,
+      "position": [1980, 200]
+    },
+    {
+      "parameters": {
+        "jsCode": "// No engagement for this post\nconst { post } = $input.first().json;\n\nreturn {\n  json: {\n    postId: post.platformPostId || post.draftId,\n    status: 'skipped',\n    reason: 'Random engagement check not passed',\n    timestamp: new Date().toISOString()\n  }\n};"
+      },
+      "id": "skip-engagement",
+      "name": "Skip Engagement",
+      "type": "n8n-nodes-base.code",
+      "typeVersion": 2,
+      "position": [660, 400]
+    },
+    {
+      "parameters": {
+        "respondWith": "json",
+        "responseBody": "={{ JSON.stringify({ success: true, status: $json.status || 'processed' }) }}",
+        "options": {}
+      },
+      "id": "respond-webhook",
+      "name": "Respond to Webhook",
+      "type": "n8n-nodes-base.respondToWebhook",
+      "typeVersion": 1.1,
+      "position": [2200, 300]
+    }
+  ],
+  "connections": {
+    "Webhook Trigger": {
+      "main": [
+        [
+          { "node": "Should Engage Decision", "type": "main", "index": 0 }
+        ]
+      ]
+    },
+    "Should Engage Decision": {
+      "main": [
+        [
+          { "node": "Engage Gate", "type": "main", "index": 0 }
+        ]
+      ]
+    },
+    "Engage Gate": {
+      "main": [
+        [
+          { "node": "Select Engagers", "type": "main", "index": 0 }
+        ],
+        [
+          { "node": "Skip Engagement", "type": "main", "index": 0 }
+        ]
+      ]
+    },
+    "Select Engagers": {
+      "main": [
+        [
+          { "node": "Wait Staggered Delay", "type": "main", "index": 0 }
+        ]
+      ]
+    },
+    "Wait Staggered Delay": {
+      "main": [
+        [
+          { "node": "Build Comment Prompt", "type": "main", "index": 0 }
+        ]
+      ]
+    },
+    "Build Comment Prompt": {
+      "main": [
+        [
+          { "node": "Generate Comment", "type": "main", "index": 0 }
+        ]
+      ]
+    },
+    "Gemini Comment Generator": {
+      "ai_languageModel": [
+        [
+          { "node": "Generate Comment", "type": "ai_languageModel", "index": 0 }
+        ]
+      ]
+    },
+    "Generate Comment": {
+      "main": [
+        [
+          { "node": "Format Comment", "type": "main", "index": 0 }
+        ]
+      ]
+    },
+    "Format Comment": {
+      "main": [
+        [
+          { "node": "Post Comment to API", "type": "main", "index": 0 }
+        ]
+      ]
+    },
+    "Post Comment to API": {
+      "main": [
+        [
+          { "node": "Log Engagement", "type": "main", "index": 0 }
+        ]
+      ]
+    },
+    "Log Engagement": {
+      "main": [
+        [
+          { "node": "Respond to Webhook", "type": "main", "index": 0 }
+        ]
+      ]
+    },
+    "Skip Engagement": {
+      "main": [
+        [
+          { "node": "Respond to Webhook", "type": "main", "index": 0 }
+        ]
+      ]
+    }
+  },
+  "active": false,
+  "versionId": "2",
+  "settings": {
+    "executionOrder": "v1"
+  },
+  "meta": {
+    "instanceId": "community-automation"
+  },
+  "tags": [
+    {
+      "name": "community-automation"
+    }
+  ]
+}

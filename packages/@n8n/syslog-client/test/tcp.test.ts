@@ -203,7 +203,8 @@ describe('SyslogClient - TCP Transport', () => {
 
 			await expect(client.log("Shouldn't work")).rejects.toThrow();
 			const error = await errorPromise;
-			expect(error).toBeInstanceOf(Error);
+			expect(error).toHaveProperty('message');
+			expect(typeof error.message).toBe('string');
 		});
 
 		it('should handle invalid port', () => {

@@ -1,0 +1,425 @@
+{
+  "name": "Community Content Generator",
+  "active": false,
+  "versionId": "1",
+  "nodes": [
+    {
+      "parameters": {
+        "rule": {
+          "interval": [
+            {
+              "field": "hours",
+              "hoursInterval": 4
+            }
+          ]
+        }
+      },
+      "id": "schedule-trigger",
+      "name": "Random Interval Trigger",
+      "type": "n8n-nodes-base.scheduleTrigger",
+      "typeVersion": 1.2,
+      "position": [0, 300]
+    },
+    {
+      "parameters": {
+        "jsCode": "// Add randomization to avoid predictable patterns\nconst shouldRun = Math.random() < 0.7; // 70% chance to actually run\n\nif (!shouldRun) {\n  return []; // Skip this execution\n}\n\n// Random delay 0-30 minutes\nconst delayMinutes = Math.floor(Math.random() * 30);\nawait new Promise(resolve => setTimeout(resolve, delayMinutes * 60 * 1000));\n\nreturn [{ json: { triggered: true, timestamp: DateTime.now().toISO() } }];"
+      },
+      "id": "randomizer",
+      "name": "Execution Randomizer",
+      "type": "n8n-nodes-base.code",
+      "typeVersion": 2,
+      "position": [220, 300]
+    },
+    {
+      "parameters": {
+        "url": "https://hacker-news.firebaseio.com/v0/topstories.json",
+        "options": {}
+      },
+      "id": "fetch-hn",
+      "name": "Fetch HN Top Stories",
+      "type": "n8n-nodes-base.httpRequest",
+      "typeVersion": 4.2,
+      "position": [440, 200]
+    },
+    {
+      "parameters": {
+        "url": "https://newsapi.org/v2/everything",
+        "authentication": "genericCredentialType",
+        "genericAuthType": "httpQueryAuth",
+        "sendQuery": true,
+        "queryParameters": {
+          "parameters": [
+            {
+              "name": "q",
+              "value": "startup OR entrepreneur OR funding OR tech"
+            },
+            {
+              "name": "sortBy",
+              "value": "publishedAt"
+            },
+            {
+              "name": "pageSize",
+              "value": "10"
+            }
+          ]
+        },
+        "options": {}
+      },
+      "id": "fetch-news",
+      "name": "Fetch News API",
+      "type": "n8n-nodes-base.httpRequest",
+      "typeVersion": 4.2,
+      "position": [440, 400]
+    },
+    {
+      "parameters": {
+        "jsCode": "// Merge and process content sources\nconst hnStories = $node['Fetch HN Top Stories'].json || [];\nconst newsArticles = $node['Fetch News API'].json?.articles || [];\n\n// Process HN stories (just IDs, need to fetch details)\nconst hnTopics = hnStories.slice(0, 5).map(id => ({\n  source: 'hackernews',\n  storyId: id,\n  type: 'tech'\n}));\n\n// Process News API articles\nconst newsTopics = newsArticles.slice(0, 5).map(article => ({\n  source: 'newsapi',\n  title: article.title,\n  description: article.description,\n  url: article.url,\n  type: 'startup'\n}));\n\n// Combine and randomly select one\nconst allTopics = [...hnTopics, ...newsTopics];\nconst selectedTopic = allTopics[Math.floor(Math.random() * allTopics.length)];\n\nreturn [{ json: selectedTopic }];"
+      },
+      "id": "merge-sources",
+      "name": "Merge & Select Topic",
+      "type": "n8n-nodes-base.code",
+      "typeVersion": 2,
+      "position": [660, 300]
+    },
+    {
+      "parameters": {
+        "jsCode": "// Persona Database\nconst PERSONAS = {\n  alex_founder: {\n    id: 'alex_founder',\n    name: 'Alex Chen',\n    background: '3x founder, 2 exits, currently building AI startup',\n    tone: 'direct, occasionally sarcastic, uses founder jargon',\n    commonPhrases: [\"here's the thing\", 'unpopular opinion', 'learned this the hard way'],\n    usesEmoji: false,\n    typoFrequency: 0.02,\n    avgLength: { min: 150, max: 400 },\n    preferredTimes: ['early-morning', 'late-night']\n  },\n  maria_vc: {\n    id: 'maria_vc',\n    name: 'Maria Rodriguez',\n    background: 'Partner at seed-stage VC, ex-operator',\n    tone: 'analytical, supportive, asks probing questions',\n    commonPhrases: ['what I look for', 'pattern I\\'m seeing', 'founders often miss'],\n    usesEmoji: true,\n    typoFrequency: 0.01,\n    avgLength: { min: 200, max: 600 },\n    preferredTimes: ['business-hours']\n  },\n  dev_sam: {\n    id: 'dev_sam',\n    name: 'Sam Park',\n    background: 'Senior engineer turned technical co-founder',\n    tone: 'casual, technical, self-deprecating humor',\n    commonPhrases: ['not gonna lie', 'hot take', '@ me', 'skill issue'],\n    usesEmoji: true,\n    typoFrequency: 0.03,\n    avgLength: { min: 50, max: 300 },\n    preferredTimes: ['late-night', 'weekend']\n  },\n  lisa_growth: {\n    id: 'lisa_growth',\n    name: 'Lisa Thompson',\n    background: 'Head of Growth, scaled 3 startups from 0 to Series B',\n    tone: 'data-driven, enthusiastic, shares frameworks',\n    commonPhrases: ['the playbook', \"here's exactly how\", 'thread incoming'],\n    usesEmoji: true,\n    typoFrequency: 0.005,\n    avgLength: { min: 300, max: 800 },\n    preferredTimes: ['morning', 'lunch']\n  },\n  newbie_jordan: {\n    id: 'newbie_jordan',\n    name: 'Jordan Lee',\n    background: 'First-time founder, building in public',\n    tone: 'curious, humble, shares learnings transparently',\n    commonPhrases: ['just learned', 'anyone else?', 'what am I missing', 'week X update'],\n    usesEmoji: true,\n    typoFrequency: 0.025,\n    avgLength: { min: 100, max: 350 },\n    preferredTimes: ['any']\n  }\n};\n\n// Get recent posters to avoid repetition (from workflow static data or external)\nconst recentPosters = $getWorkflowStaticData('global').recentPosters || [];\n\n// Filter out recent posters\nconst availablePersonas = Object.values(PERSONAS)\n  .filter(p => !recentPosters.slice(-3).includes(p.id));\n\n// Random selection with time-based weighting\nconst now = DateTime.now();\nconst hour = now.hour;\n\nconst weighted = availablePersonas.map(p => {\n  let weight = 1;\n  \n  // Time-based weighting\n  if (p.preferredTimes.includes('any')) weight += 1;\n  if (p.preferredTimes.includes('early-morning') && hour >= 6 && hour < 9) weight += 3;\n  if (p.preferredTimes.includes('morning') && hour >= 9 && hour < 12) weight += 3;\n  if (p.preferredTimes.includes('business-hours') && hour >= 9 && hour < 17) weight += 2;\n  if (p.preferredTimes.includes('lunch') && hour >= 12 && hour < 14) weight += 3;\n  if (p.preferredTimes.includes('late-night') && (hour >= 21 || hour < 2)) weight += 3;\n  if (p.preferredTimes.includes('weekend') && now.weekday >= 6) weight += 3;\n  \n  return { persona: p, weight };\n});\n\n// Weighted random selection\nconst totalWeight = weighted.reduce((sum, w) => sum + w.weight, 0);\nlet random = Math.random() * totalWeight;\n\nlet selectedPersona;\nfor (const { persona, weight } of weighted) {\n  random -= weight;\n  if (random <= 0) {\n    selectedPersona = persona;\n    break;\n  }\n}\n\nif (!selectedPersona) selectedPersona = weighted[0].persona;\n\n// Update recent posters\nrecentPosters.push(selectedPersona.id);\nif (recentPosters.length > 10) recentPosters.shift();\n$getWorkflowStaticData('global').recentPosters = recentPosters;\n\nreturn [{\n  json: {\n    topic: $json,\n    persona: selectedPersona\n  }\n}];"
+      },
+      "id": "persona-selector",
+      "name": "Select Persona",
+      "type": "n8n-nodes-base.code",
+      "typeVersion": 2,
+      "position": [880, 300]
+    },
+    {
+      "parameters": {
+        "jsCode": "// Build the AI prompt based on persona\nconst { topic, persona } = $json;\n\nconst contentTypes = ['article', 'discussion', 'question', 'hot-take'];\nconst selectedType = contentTypes[Math.floor(Math.random() * contentTypes.length)];\n\nconst prompt = `You are writing as ${persona.name}, a community member.\n\nYOUR BACKGROUND: ${persona.background}\n\nYOUR VOICE & STYLE:\n- Tone: ${persona.tone}\n- Common phrases you naturally use: ${persona.commonPhrases.join(', ')}\n- Emoji usage: ${persona.usesEmoji ? 'Yes, sparingly and naturally' : 'No emojis'}\n- Target length: ${persona.avgLength.min}-${persona.avgLength.max} words\n\nTOPIC TO WRITE ABOUT:\n${topic.title || topic.description || 'General startup/tech discussion'}\n${topic.url ? `Source: ${topic.url}` : ''}\n\nCONTENT TYPE: ${selectedType}\n\nCRITICAL HUMANIZATION RULES:\n1. DO NOT be generic or write like marketing copy\n2. Include a personal anecdote or specific example from \"your experience\"\n3. Reference specific numbers, dates, or details (make them realistic)\n4. Include ONE natural imperfection:\n   - A minor tangent that you bring back\n   - A self-correction mid-thought\n   - An aside in parentheses\n   - A rhetorical question\n5. End with something that invites response\n6. Vary your sentence structure\n7. Use contractions naturally\n\nWHAT TO AVOID:\n- Starting with \"I think\" or \"In my opinion\"\n- Perfect grammar throughout\n- Corporate buzzwords without irony\n- Concluding with \"What do you think?\"\n- Words like \"delve\", \"furthermore\", \"moreover\"\n- Phrases like \"it's important to note\", \"it's worth mentioning\"\n\nWrite the post now. Output ONLY the post content, nothing else.`;\n\nreturn [{\n  json: {\n    prompt,\n    persona,\n    topic,\n    contentType: selectedType\n  }\n}];"
+      },
+      "id": "build-prompt",
+      "name": "Build AI Prompt",
+      "type": "n8n-nodes-base.code",
+      "typeVersion": 2,
+      "position": [1100, 300]
+    },
+    {
+      "parameters": {
+        "model": "claude-sonnet-4-20250514",
+        "messages": {
+          "values": [
+            {
+              "role": "user",
+              "content": "={{ $json.prompt }}"
+            }
+          ]
+        },
+        "options": {
+          "temperature": 0.9,
+          "maxTokens": 1000
+        }
+      },
+      "id": "ai-generate",
+      "name": "Generate Content (Claude)",
+      "type": "@n8n/n8n-nodes-langchain.lmChatAnthropic",
+      "typeVersion": 1.2,
+      "position": [1320, 300],
+      "credentials": {
+        "anthropicApi": {
+          "id": "ANTHROPIC_CREDENTIAL_ID",
+          "name": "Anthropic API"
+        }
+      }
+    },
+    {
+      "parameters": {
+        "jsCode": "// Humanization Filter - Add natural imperfections\nlet content = $json.text || $json.content || '';\nconst persona = $node['Build AI Prompt'].json.persona;\n\n// 1. Typo Injection\nconst typoPatterns = [\n  { find: /\\bthe\\b/g, replace: 'teh' },\n  { find: /\\bjust\\b/g, replace: 'jsut' },\n  { find: /\\bwith\\b/g, replace: 'wiht' },\n  { find: /\\breally\\b/g, replace: 'realy' },\n  { find: /\\bdefinitely\\b/g, replace: 'definately' },\n];\n\nconst typoChance = persona.typoFrequency || 0.02;\nlet typosAdded = 0;\nconst maxTypos = Math.ceil(content.split(' ').length * typoChance);\n\nfor (const pattern of typoPatterns) {\n  if (typosAdded >= maxTypos) break;\n  if (Math.random() < typoChance) {\n    const matches = content.match(pattern.find);\n    if (matches && matches.length > 0) {\n      // Only replace first occurrence\n      content = content.replace(pattern.find, (match) => {\n        if (typosAdded < maxTypos && Math.random() < 0.3) {\n          typosAdded++;\n          return pattern.replace;\n        }\n        return match;\n      });\n    }\n  }\n}\n\n// 2. Occasionally add double space\nif (Math.random() < 0.1) {\n  const words = content.split(' ');\n  const insertPoint = Math.floor(Math.random() * words.length);\n  words[insertPoint] = words[insertPoint] + ' ';\n  content = words.join(' ');\n}\n\n// 3. Vary punctuation\nif (Math.random() < 0.15) {\n  // Add ellipsis somewhere\n  content = content.replace(/\\. (?=[A-Z])/, '... ');\n}\n\n// 4. Add edit notation occasionally\nif (Math.random() < 0.08) {\n  const editNotes = ['\\n\\nedit: typo', '\\n\\nedit: clarity', ''];\n  content += editNotes[Math.floor(Math.random() * editNotes.length)];\n}\n\n// 5. AI Detection Check\nconst aiPatterns = [\n  { pattern: /\\bdelve\\b/i, score: 3 },\n  { pattern: /\\bfurthermore\\b/i, score: 2 },\n  { pattern: /\\bmoreover\\b/i, score: 2 },\n  { pattern: /\\bit's important to note\\b/i, score: 3 },\n  { pattern: /\\bit's worth mentioning\\b/i, score: 3 },\n  { pattern: /\\bin conclusion\\b/i, score: 3 },\n];\n\nlet aiScore = 0;\nfor (const { pattern, score } of aiPatterns) {\n  if (pattern.test(content)) aiScore += score;\n}\n\nreturn [{\n  json: {\n    content,\n    persona: persona,\n    contentType: $node['Build AI Prompt'].json.contentType,\n    topic: $node['Build AI Prompt'].json.topic,\n    aiDetectionScore: aiScore,\n    typosAdded,\n    needsRewrite: aiScore > 8\n  }\n}];"
+      },
+      "id": "humanize",
+      "name": "Humanization Filter",
+      "type": "n8n-nodes-base.code",
+      "typeVersion": 2,
+      "position": [1540, 300]
+    },
+    {
+      "parameters": {
+        "conditions": {
+          "options": {
+            "caseSensitive": true,
+            "leftValue": "",
+            "typeValidation": "strict"
+          },
+          "conditions": [
+            {
+              "id": "quality-check",
+              "leftValue": "={{ $json.needsRewrite }}",
+              "rightValue": false,
+              "operator": {
+                "type": "boolean",
+                "operation": "equals"
+              }
+            }
+          ],
+          "combinator": "and"
+        },
+        "options": {}
+      },
+      "id": "quality-gate",
+      "name": "Quality Check",
+      "type": "n8n-nodes-base.if",
+      "typeVersion": 2.2,
+      "position": [1760, 300]
+    },
+    {
+      "parameters": {
+        "jsCode": "// Calculate smart posting time\nconst persona = $json.persona;\nconst now = DateTime.now();\n\n// Time slots based on persona preference\nconst timeSlots = {\n  'early-morning': { hours: [6, 7, 8], variance: 45 },\n  'morning': { hours: [9, 10, 11], variance: 30 },\n  'business-hours': { hours: [9, 10, 11, 14, 15, 16], variance: 30 },\n  'lunch': { hours: [12, 13], variance: 20 },\n  'late-night': { hours: [21, 22, 23, 0], variance: 40 },\n  'weekend': { hours: [10, 11, 14, 15, 16], variance: 60 },\n  'any': { hours: [9, 10, 11, 12, 14, 15, 16, 17, 19, 20, 21], variance: 30 }\n};\n\nconst preferredSlot = persona.preferredTimes[Math.floor(Math.random() * persona.preferredTimes.length)];\nconst slot = timeSlots[preferredSlot] || timeSlots['any'];\n\nconst targetHour = slot.hours[Math.floor(Math.random() * slot.hours.length)];\nconst targetMinute = Math.floor(Math.random() * 60);\nconst variance = Math.floor(Math.random() * slot.variance) - (slot.variance / 2);\n\nlet scheduledTime = now.set({ hour: targetHour, minute: targetMinute }).plus({ minutes: variance });\n\n// If time has passed, schedule for tomorrow\nif (scheduledTime < now) {\n  scheduledTime = scheduledTime.plus({ days: 1 });\n}\n\n// Add human inconsistency\nif (Math.random() < 0.15) {\n  const drift = Math.floor(Math.random() * 20) - 10;\n  scheduledTime = scheduledTime.plus({ minutes: drift });\n}\n\nreturn [{\n  json: {\n    ...($json),\n    scheduledFor: scheduledTime.toISO(),\n    delayMs: Math.max(0, scheduledTime.diff(now).milliseconds),\n    timeSlot: preferredSlot\n  }\n}];"
+      },
+      "id": "schedule-calc",
+      "name": "Calculate Post Time",
+      "type": "n8n-nodes-base.code",
+      "typeVersion": 2,
+      "position": [1980, 200]
+    },
+    {
+      "parameters": {
+        "values": {
+          "string": [
+            {
+              "name": "status",
+              "value": "Content failed quality check - needs manual review or regeneration"
+            }
+          ]
+        },
+        "options": {}
+      },
+      "id": "quality-fail",
+      "name": "Quality Failed",
+      "type": "n8n-nodes-base.set",
+      "typeVersion": 3.4,
+      "position": [1980, 400]
+    },
+    {
+      "parameters": {
+        "url": "={{ $vars.COMMUNITY_API_URL }}/posts",
+        "sendHeaders": true,
+        "headerParameters": {
+          "parameters": [
+            {
+              "name": "Authorization",
+              "value": "=Bearer {{ $vars.COMMUNITY_API_TOKEN }}"
+            },
+            {
+              "name": "X-Account-Id",
+              "value": "={{ $json.persona.id }}"
+            }
+          ]
+        },
+        "sendBody": true,
+        "bodyParameters": {
+          "parameters": [
+            {
+              "name": "content",
+              "value": "={{ $json.content }}"
+            },
+            {
+              "name": "category",
+              "value": "={{ $json.contentType }}"
+            }
+          ]
+        },
+        "options": {}
+      },
+      "id": "post-content",
+      "name": "Post to Community",
+      "type": "n8n-nodes-base.httpRequest",
+      "typeVersion": 4.2,
+      "position": [2200, 200]
+    },
+    {
+      "parameters": {
+        "values": {
+          "string": [
+            {
+              "name": "status",
+              "value": "=Post published successfully by {{ $json.persona.name }}"
+            },
+            {
+              "name": "contentPreview",
+              "value": "={{ $json.content.substring(0, 100) }}..."
+            }
+          ]
+        },
+        "options": {}
+      },
+      "id": "log-success",
+      "name": "Log Success",
+      "type": "n8n-nodes-base.set",
+      "typeVersion": 3.4,
+      "position": [2420, 200]
+    }
+  ],
+  "connections": {
+    "Random Interval Trigger": {
+      "main": [
+        [
+          {
+            "node": "Execution Randomizer",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "Execution Randomizer": {
+      "main": [
+        [
+          {
+            "node": "Fetch HN Top Stories",
+            "type": "main",
+            "index": 0
+          },
+          {
+            "node": "Fetch News API",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "Fetch HN Top Stories": {
+      "main": [
+        [
+          {
+            "node": "Merge & Select Topic",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "Fetch News API": {
+      "main": [
+        [
+          {
+            "node": "Merge & Select Topic",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "Merge & Select Topic": {
+      "main": [
+        [
+          {
+            "node": "Select Persona",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "Select Persona": {
+      "main": [
+        [
+          {
+            "node": "Build AI Prompt",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "Build AI Prompt": {
+      "main": [
+        [
+          {
+            "node": "Generate Content (Claude)",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "Generate Content (Claude)": {
+      "main": [
+        [
+          {
+            "node": "Humanization Filter",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "Humanization Filter": {
+      "main": [
+        [
+          {
+            "node": "Quality Check",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "Quality Check": {
+      "main": [
+        [
+          {
+            "node": "Calculate Post Time",
+            "type": "main",
+            "index": 0
+          }
+        ],
+        [
+          {
+            "node": "Quality Failed",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "Calculate Post Time": {
+      "main": [
+        [
+          {
+            "node": "Post to Community",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "Post to Community": {
+      "main": [
+        [
+          {
+            "node": "Log Success",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    }
+  },
+  "settings": {
+    "executionOrder": "v1"
+  },
+  "staticData": {
+    "global": {
+      "recentPosters": []
+    }
+  },
+  "tags": [
+    {
+      "name": "community"
+    },
+    {
+      "name": "automation"
+    },
+    {
+      "name": "ai-content"
+    }
+  ],
+  "triggerCount": 1
+}

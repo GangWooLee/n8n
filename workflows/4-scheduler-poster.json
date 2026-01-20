@@ -1,0 +1,442 @@
+{
+  "name": "4. Scheduler & Poster",
+  "nodes": [
+    {
+      "parameters": {
+        "content": "## 4. Scheduler & Poster - 사용 가이드\n\n### 목적\n페르소나별 선호 시간대에 맞춰 스마트 스케줄링 후 커뮤니티에 게시\n\n### Rails API 연동\n**엔드포인트**: `POST /api/v1/posts`\n**인증**: Bearer Token (페르소나별 api_token)\n**요청 형식**:\n```json\n{\n  \"post\": {\n    \"title\": \"제목\",\n    \"content\": \"내용\",\n    \"category\": \"free|question|promotion\"\n  }\n}\n```\n\n### 스케줄링 로직\n페르소나별 활동 시간:\n- **Alex (late-night)**: 21~24시\n- **Sam (early-morning)**: 6~8시\n- **Jenny (business-hours)**: 9~11시, 14~16시\n- **Mike (morning)**: 9~11시\n- **Sarah (lunch)**: 12~13시\n\n### Rate Limiting\n- 페르소나당: 하루 5개, 시간당 1개\n- 전역: 하루 20개, 시간당 3개\n- 최소 간격: 2시간\n\n### 사전 설정 필요\n1. **Variables**:\n   - `COMMUNITY_API_URL`: Rails 서버 URL (예: http://localhost:3000)\n   - `ENGAGEMENT_WEBHOOK`: Workflow 5의 웹훅 URL\n   - 각 페르소나별 API 토큰 (시드 유저 생성 후 확인)\n\n### 웹훅 URL\n활성화 후 URL 복사 → Workflow 3의 `SCHEDULER_WEBHOOK`에 설정",
+        "height": 780,
+        "width": 450
+      },
+      "id": "sticky-guide",
+      "name": "Sticky Note",
+      "type": "n8n-nodes-base.stickyNote",
+      "typeVersion": 1,
+      "position": [-550, 30]
+    },
+    {
+      "parameters": {
+        "httpMethod": "POST",
+        "path": "scheduler-poster",
+        "responseMode": "responseNode",
+        "options": {}
+      },
+      "id": "webhook-trigger",
+      "name": "Webhook Trigger",
+      "type": "n8n-nodes-base.webhook",
+      "typeVersion": 2,
+      "position": [0, 300],
+      "webhookId": "scheduler-poster-webhook"
+    },
+    {
+      "parameters": {
+        "jsCode": "const draft = $input.first().json.body || $input.first().json;\nconst persona = draft.persona;\n\n// Time slot configurations\nconst timeSlots = {\n  'early-morning': { hours: [6, 7, 8], variance: 45 },\n  'morning': { hours: [9, 10, 11], variance: 30 },\n  'business-hours': { hours: [9, 10, 11, 14, 15, 16], variance: 30 },\n  'lunch': { hours: [12, 13], variance: 20 },\n  'late-night': { hours: [21, 22, 23, 0], variance: 40 }\n};\n\nconst now = new Date();\nconst slot = timeSlots[persona.preferredTime] || timeSlots['business-hours'];\n\n// Select random hour from slot\nconst hour = slot.hours[Math.floor(Math.random() * slot.hours.length)];\n\n// Random minute\nconst minute = Math.floor(Math.random() * 60);\n\n// Calculate variance\nconst variance = Math.floor(Math.random() * slot.variance) - slot.variance / 2;\n\n// Create target time\nlet target = new Date(now);\ntarget.setHours(hour, minute, 0, 0);\n\n// Add variance in minutes\ntarget = new Date(target.getTime() + variance * 60 * 1000);\n\n// If target is in the past, move to tomorrow\nif (target < now) {\n  target = new Date(target.getTime() + 24 * 60 * 60 * 1000);\n}\n\n// Human inconsistency - occasionally shift by a few minutes\nif (Math.random() < 0.15) {\n  const shift = Math.floor(Math.random() * 20) - 10;\n  target = new Date(target.getTime() + shift * 60 * 1000);\n}\n\n// Calculate delay in milliseconds\nconst delayMs = Math.max(0, target.getTime() - now.getTime());\n\n// Convert to wait node format (seconds for easier debugging)\nconst delaySeconds = Math.floor(delayMs / 1000);\n\nreturn {\n  json: {\n    ...draft,\n    scheduling: {\n      scheduledFor: target.toISOString(),\n      delayMs,\n      delaySeconds,\n      delayMinutes: Math.floor(delayMs / 60000),\n      slot: persona.preferredTime,\n      calculatedAt: now.toISOString()\n    },\n    status: 'scheduled'\n  }\n};"
+      },
+      "id": "time-calculator",
+      "name": "Time Calculator",
+      "type": "n8n-nodes-base.code",
+      "typeVersion": 2,
+      "position": [220, 300]
+    },
+    {
+      "parameters": {
+        "jsCode": "// Rate limit check before scheduling\nconst draft = $input.first().json;\nconst persona = draft.persona;\n\n// Rate limit configuration\nconst RATE_LIMITS = {\n  perPersona: {\n    postsPerDay: 5,\n    postsPerHour: 1,\n    minGapMinutes: 120\n  },\n  global: {\n    postsPerDay: 20,\n    postsPerHour: 3\n  }\n};\n\n// In a real implementation, this would query the database\n// For now, we'll pass through with rate limit metadata\nconst rateCheck = {\n  allowed: true,\n  personaPostsToday: 0, // Would be from DB\n  personaPostsHour: 0,\n  globalPostsToday: 0,\n  globalPostsHour: 0,\n  nextAllowedAt: null\n};\n\n// Simulate rate limit check\nif (rateCheck.personaPostsHour >= RATE_LIMITS.perPersona.postsPerHour) {\n  rateCheck.allowed = false;\n  rateCheck.waitMinutes = 60 - new Date().getMinutes();\n}\n\nif (rateCheck.personaPostsToday >= RATE_LIMITS.perPersona.postsPerDay) {\n  rateCheck.allowed = false;\n  const tomorrow = new Date();\n  tomorrow.setDate(tomorrow.getDate() + 1);\n  tomorrow.setHours(0, 0, 0, 0);\n  rateCheck.nextAllowedAt = tomorrow.toISOString();\n}\n\nreturn {\n  json: {\n    ...draft,\n    rateLimit: rateCheck\n  }\n};"
+      },
+      "id": "rate-limit-check",
+      "name": "Rate Limit Check",
+      "type": "n8n-nodes-base.code",
+      "typeVersion": 2,
+      "position": [440, 300]
+    },
+    {
+      "parameters": {
+        "conditions": {
+          "options": {
+            "caseSensitive": true,
+            "leftValue": "",
+            "typeValidation": "strict"
+          },
+          "conditions": [
+            {
+              "id": "rate-allowed",
+              "leftValue": "={{ $json.rateLimit.allowed }}",
+              "rightValue": true,
+              "operator": {
+                "type": "boolean",
+                "operation": "equals"
+              }
+            }
+          ],
+          "combinator": "and"
+        },
+        "options": {}
+      },
+      "id": "rate-gate",
+      "name": "Rate Limit Gate",
+      "type": "n8n-nodes-base.if",
+      "typeVersion": 2,
+      "position": [660, 300]
+    },
+    {
+      "parameters": {
+        "jsCode": "// Store scheduled post to database (placeholder - use actual DB node)\nconst draft = $input.first().json;\n\nreturn {\n  json: {\n    ...draft,\n    stored: true,\n    storedAt: new Date().toISOString()\n  }\n};"
+      },
+      "id": "store-scheduled",
+      "name": "Store Scheduled Post",
+      "type": "n8n-nodes-base.code",
+      "typeVersion": 2,
+      "position": [880, 200]
+    },
+    {
+      "parameters": {
+        "amount": "1",
+        "unit": "seconds"
+      },
+      "id": "wait-until-time",
+      "name": "Wait Until Scheduled Time",
+      "type": "n8n-nodes-base.wait",
+      "typeVersion": 1.1,
+      "position": [1100, 200]
+    },
+    {
+      "parameters": {
+        "jsCode": "// Prepare API request for Rails\nconst draft = $input.first().json;\nconst persona = draft.persona;\n\n// Map content type to Rails category\nconst categoryMap = {\n  'hot-take': 'free',\n  'question': 'question',\n  'discussion': 'free',\n  'article': 'free',\n  'promotion': 'promotion'\n};\n\nconst category = categoryMap[draft.topic?.contentType] || 'free';\n\n// Generate title from content (first sentence or first 50 chars)\nlet title = draft.content.split(/[.!?]/)[0].trim();\nif (title.length > 100) {\n  title = title.substring(0, 97) + '...';\n}\n\n// TEST MODE: 하드코딩된 API 토큰 사용\nconst TEST_API_TOKEN = 'f9591b8c618d17fdfb8e73eac11faf73cd54ef68d8bda08be4409d5a300ce97d';\n\nreturn {\n  json: {\n    ...draft,\n    apiRequest: {\n      title,\n      content: draft.content,\n      category,\n      apiToken: TEST_API_TOKEN\n    }\n  }\n};"
+      },
+      "id": "prepare-api-request",
+      "name": "Prepare API Request",
+      "type": "n8n-nodes-base.code",
+      "typeVersion": 2,
+      "position": [1320, 200]
+    },
+    {
+      "parameters": {
+        "method": "POST",
+        "url": "http://127.0.0.1:3000/api/v1/posts",
+        "sendHeaders": true,
+        "headerParameters": {
+          "parameters": [
+            {
+              "name": "Authorization",
+              "value": "={{ 'Bearer ' + $json.apiRequest.apiToken }}"
+            },
+            {
+              "name": "Content-Type",
+              "value": "application/json"
+            }
+          ]
+        },
+        "sendBody": true,
+        "specifyBody": "json",
+        "jsonBody": "={\n  \"post\": {\n    \"title\": {{ JSON.stringify($json.apiRequest.title) }},\n    \"content\": {{ JSON.stringify($json.apiRequest.content) }},\n    \"category\": {{ JSON.stringify($json.apiRequest.category) }}\n  }\n}",
+        "options": {
+          "response": {
+            "response": {
+              "fullResponse": true
+            }
+          }
+        }
+      },
+      "id": "post-to-api",
+      "name": "Post to Community API",
+      "type": "n8n-nodes-base.httpRequest",
+      "typeVersion": 4.2,
+      "position": [1540, 200]
+    },
+    {
+      "parameters": {
+        "conditions": {
+          "options": {
+            "caseSensitive": true,
+            "leftValue": "",
+            "typeValidation": "strict"
+          },
+          "conditions": [
+            {
+              "id": "post-success",
+              "leftValue": "={{ $json.statusCode }}",
+              "rightValue": 201,
+              "operator": {
+                "type": "number",
+                "operation": "equals"
+              }
+            }
+          ],
+          "combinator": "or"
+        },
+        "options": {}
+      },
+      "id": "post-success-check",
+      "name": "Post Success Check",
+      "type": "n8n-nodes-base.if",
+      "typeVersion": 2,
+      "position": [1760, 200]
+    },
+    {
+      "parameters": {
+        "jsCode": "// Handle successful post\nconst response = $input.first().json;\nconst originalData = $('Prepare API Request').first().json;\n\n// Rails API returns: { success: true, post: { id, title, category, url, created_at } }\nconst postData = response.body?.post || {};\n\nreturn {\n  json: {\n    draftId: originalData.draftId,\n    platformPostId: postData.id,\n    postUrl: postData.url,\n    personaId: originalData.persona.id,\n    content: originalData.content,\n    postedAt: new Date().toISOString(),\n    status: 'posted',\n    topic: originalData.topic,\n    persona: originalData.persona\n  }\n};"
+      },
+      "id": "handle-success",
+      "name": "Handle Success",
+      "type": "n8n-nodes-base.code",
+      "typeVersion": 2,
+      "position": [1980, 100]
+    },
+    {
+      "parameters": {
+        "jsCode": "// Log successful post to database\nconst post = $input.first().json;\n\n// Update post record with platform ID and posted timestamp\n// In real implementation, this would be a database update\n\nreturn {\n  json: {\n    ...post,\n    logged: true,\n    loggedAt: new Date().toISOString()\n  }\n};"
+      },
+      "id": "log-success",
+      "name": "Log to Database",
+      "type": "n8n-nodes-base.code",
+      "typeVersion": 2,
+      "position": [2200, 100]
+    },
+    {
+      "parameters": {
+        "url": "={{ $vars.ENGAGEMENT_WEBHOOK }}",
+        "sendHeaders": true,
+        "headerParameters": {
+          "parameters": [
+            {
+              "name": "Content-Type",
+              "value": "application/json"
+            }
+          ]
+        },
+        "sendBody": true,
+        "specifyBody": "json",
+        "jsonBody": "={{ JSON.stringify($json) }}",
+        "options": {}
+      },
+      "id": "trigger-engagement",
+      "name": "Trigger Engagement Simulator",
+      "type": "n8n-nodes-base.httpRequest",
+      "typeVersion": 4.2,
+      "position": [2420, 100]
+    },
+    {
+      "parameters": {
+        "jsCode": "// Handle failed post\nconst response = $input.first().json;\nconst originalData = $('Prepare API Request').first().json;\n\nreturn {\n  json: {\n    draftId: originalData.draftId,\n    personaId: originalData.persona.id,\n    status: 'failed',\n    failedAt: new Date().toISOString(),\n    error: {\n      statusCode: response.statusCode,\n      message: response.body?.error || response.body?.errors?.join(', ') || 'Unknown error'\n    },\n    retryCount: (originalData.retryCount || 0) + 1\n  }\n};"
+      },
+      "id": "handle-failure",
+      "name": "Handle Failure",
+      "type": "n8n-nodes-base.code",
+      "typeVersion": 2,
+      "position": [1980, 300]
+    },
+    {
+      "parameters": {
+        "conditions": {
+          "options": {
+            "caseSensitive": true,
+            "leftValue": "",
+            "typeValidation": "strict"
+          },
+          "conditions": [
+            {
+              "id": "retry-check",
+              "leftValue": "={{ $json.retryCount }}",
+              "rightValue": 3,
+              "operator": {
+                "type": "number",
+                "operation": "lt"
+              }
+            }
+          ],
+          "combinator": "and"
+        },
+        "options": {}
+      },
+      "id": "retry-gate",
+      "name": "Retry Gate",
+      "type": "n8n-nodes-base.if",
+      "typeVersion": 2,
+      "position": [2200, 300]
+    },
+    {
+      "parameters": {
+        "amount": 5,
+        "unit": "minutes"
+      },
+      "id": "wait-retry",
+      "name": "Wait Before Retry",
+      "type": "n8n-nodes-base.wait",
+      "typeVersion": 1.1,
+      "position": [2420, 250]
+    },
+    {
+      "parameters": {
+        "jsCode": "// Max retries exceeded - log permanent failure\nconst failure = $input.first().json;\n\nreturn {\n  json: {\n    ...failure,\n    status: 'permanently_failed',\n    permanentFailureAt: new Date().toISOString(),\n    requiresManualReview: true\n  }\n};"
+      },
+      "id": "log-permanent-failure",
+      "name": "Log Permanent Failure",
+      "type": "n8n-nodes-base.code",
+      "typeVersion": 2,
+      "position": [2420, 400]
+    },
+    {
+      "parameters": {
+        "jsCode": "// Rate limited - reschedule for later\nconst draft = $input.first().json;\n\nconst rescheduleTime = new Date();\nif (draft.rateLimit.nextAllowedAt) {\n  rescheduleTime.setTime(new Date(draft.rateLimit.nextAllowedAt).getTime());\n} else if (draft.rateLimit.waitMinutes) {\n  rescheduleTime.setMinutes(rescheduleTime.getMinutes() + draft.rateLimit.waitMinutes);\n} else {\n  rescheduleTime.setHours(rescheduleTime.getHours() + 1);\n}\n\nreturn {\n  json: {\n    ...draft,\n    status: 'rate_limited',\n    rescheduledFor: rescheduleTime.toISOString(),\n    reason: 'Rate limit exceeded'\n  }\n};"
+      },
+      "id": "handle-rate-limit",
+      "name": "Handle Rate Limit",
+      "type": "n8n-nodes-base.code",
+      "typeVersion": 2,
+      "position": [880, 400]
+    },
+    {
+      "parameters": {
+        "respondWith": "json",
+        "responseBody": "={{ JSON.stringify({ success: true, status: 'scheduled', scheduledFor: $('Time Calculator').first().json.scheduling.scheduledFor }) }}",
+        "options": {}
+      },
+      "id": "respond-webhook",
+      "name": "Respond to Webhook",
+      "type": "n8n-nodes-base.respondToWebhook",
+      "typeVersion": 1.1,
+      "position": [2640, 200]
+    }
+  ],
+  "connections": {
+    "Webhook Trigger": {
+      "main": [
+        [
+          { "node": "Time Calculator", "type": "main", "index": 0 }
+        ]
+      ]
+    },
+    "Time Calculator": {
+      "main": [
+        [
+          { "node": "Rate Limit Check", "type": "main", "index": 0 }
+        ]
+      ]
+    },
+    "Rate Limit Check": {
+      "main": [
+        [
+          { "node": "Rate Limit Gate", "type": "main", "index": 0 }
+        ]
+      ]
+    },
+    "Rate Limit Gate": {
+      "main": [
+        [
+          { "node": "Store Scheduled Post", "type": "main", "index": 0 }
+        ],
+        [
+          { "node": "Handle Rate Limit", "type": "main", "index": 0 }
+        ]
+      ]
+    },
+    "Store Scheduled Post": {
+      "main": [
+        [
+          { "node": "Wait Until Scheduled Time", "type": "main", "index": 0 }
+        ]
+      ]
+    },
+    "Wait Until Scheduled Time": {
+      "main": [
+        [
+          { "node": "Prepare API Request", "type": "main", "index": 0 }
+        ]
+      ]
+    },
+    "Prepare API Request": {
+      "main": [
+        [
+          { "node": "Post to Community API", "type": "main", "index": 0 }
+        ]
+      ]
+    },
+    "Post to Community API": {
+      "main": [
+        [
+          { "node": "Post Success Check", "type": "main", "index": 0 }
+        ]
+      ]
+    },
+    "Post Success Check": {
+      "main": [
+        [
+          { "node": "Handle Success", "type": "main", "index": 0 }
+        ],
+        [
+          { "node": "Handle Failure", "type": "main", "index": 0 }
+        ]
+      ]
+    },
+    "Handle Success": {
+      "main": [
+        [
+          { "node": "Log to Database", "type": "main", "index": 0 }
+        ]
+      ]
+    },
+    "Log to Database": {
+      "main": [
+        [
+          { "node": "Trigger Engagement Simulator", "type": "main", "index": 0 }
+        ]
+      ]
+    },
+    "Trigger Engagement Simulator": {
+      "main": [
+        [
+          { "node": "Respond to Webhook", "type": "main", "index": 0 }
+        ]
+      ]
+    },
+    "Handle Failure": {
+      "main": [
+        [
+          { "node": "Retry Gate", "type": "main", "index": 0 }
+        ]
+      ]
+    },
+    "Retry Gate": {
+      "main": [
+        [
+          { "node": "Wait Before Retry", "type": "main", "index": 0 }
+        ],
+        [
+          { "node": "Log Permanent Failure", "type": "main", "index": 0 }
+        ]
+      ]
+    },
+    "Wait Before Retry": {
+      "main": [
+        [
+          { "node": "Post to Community API", "type": "main", "index": 0 }
+        ]
+      ]
+    },
+    "Handle Rate Limit": {
+      "main": [
+        [
+          { "node": "Respond to Webhook", "type": "main", "index": 0 }
+        ]
+      ]
+    },
+    "Log Permanent Failure": {
+      "main": [
+        [
+          { "node": "Respond to Webhook", "type": "main", "index": 0 }
+        ]
+      ]
+    }
+  },
+  "active": false,
+  "versionId": "2",
+  "settings": {
+    "executionOrder": "v1"
+  },
+  "meta": {
+    "instanceId": "community-automation"
+  },
+  "tags": [
+    {
+      "name": "community-automation"
+    }
+  ]
+}

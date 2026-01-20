@@ -249,13 +249,14 @@ describe('Data Transformation Functions', () => {
 			});
 
 			test('should return a DateTime for JS Date', () => {
+				// Create a reference JS Date and convert it
+				const jsDate = new Date(2024, 5, 15, 12, 0, 0, 0);
 				const result = evaluate(
-					'={{ new Date(2024, 0, 1, 12).toDateTime() }}',
+					'={{ new Date(2024, 5, 15, 12, 0, 0, 0).toDateTime() }}',
 				) as unknown as DateTime;
 				expect(result).toBeInstanceOf(DateTime);
-				expect(result.day).toEqual(1);
-				expect(result.month).toEqual(1);
-				expect(result.year).toEqual(2024);
+				// Verify the DateTime represents the same instant as the input JS Date
+				expect(result.toMillis()).toEqual(jsDate.getTime());
 			});
 		});
 
