@@ -45,3 +45,9 @@ packages/cli/THIRD_PARTY_LICENSES.md
 .nyc_output
 packages/cli/src/commands/export/outputs
 *.bak
+
+# Sensitive workflow config files
+workflows/config/personas.json
+workflows/config/settings.json
+.env.*
+!.env.example

@@ -1,0 +1,45 @@
+{
+  "personas": [
+    {
+      "id": "persona_1",
+      "name": "Example Persona",
+      "accountId": null,
+      "apiTokenVar": "PERSONA_1_API_TOKEN",
+      "background": "Description of persona's background and expertise",
+      "tone": "direct, professional, friendly",
+      "phrases": ["example phrase 1", "example phrase 2"],
+      "emoji": false,
+      "typoRate": 0.02,
+      "length": { "min": 150, "max": 400 },
+      "preferredTime": "business-hours",
+      "expertise": ["topic1", "topic2", "topic3"],
+      "postingStyle": {
+        "includesNumbers": true,
+        "usesThreads": false,
+        "endsWithQuestion": 0.3
+      }
+    }
+  ],
+  "engagementRules": {
+    "neverSelfEngage": true,
+    "maxEngagersPerPost": 2,
+    "minEngagerDelay": 5,
+    "maxEngagerDelay": 45,
+    "commentTypes": ["agreement", "pushback", "question", "experience"],
+    "commentTypeWeights": {
+      "agreement": 0.35,
+      "pushback": 0.25,
+      "question": 0.25,
+      "experience": 0.15
+    }
+  },
+  "railsApiConfig": {
+    "baseUrl": "http://localhost:3000",
+    "endpoints": {
+      "posts": "/api/v1/posts",
+      "comments": "/api/v1/posts/:post_id/comments"
+    },
+    "authentication": "Bearer Token",
+    "note": "Set API tokens in n8n Variables after running Rails seed script"
+  }
+}
